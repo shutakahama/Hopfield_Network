@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-from numpy.random import *
-import copy
 import argparse
+import copy
+
+import matplotlib.cm as cm
+import matplotlib.pyplot as plt
+import numpy as np
+from numpy.random import *
+from tqdm import tqdm
 
 
 class Hopfield:
@@ -19,99 +21,94 @@ class Hopfield:
         self.W = np.zeros((self.data_size*self.data_size, self.data_size*self.data_size))
 
         # トレーニングデータのプロット
-        # self.plot(self.train_data.T, 'train_data')
-
-    # 描画
-    def plot(self, data, name='example'):
-        data_num = data.shape[0]
-        
-        for i in range(data_num):
-            train_graph = data[i].reshape(self.data_size, self.data_size)
-            plt.subplot(1, data_num, i+1)
-            plt.imshow(train_graph, cmap=cm.Greys_r, interpolation='nearest')
-            plt.title('data{0}'.format(i+1))
-
-        # plt.show()
-        plt.savefig('fig/{}.png'.format(name))
-
-    # テストデータの作成
-    def test_make(self, test_idx):
-        x_test = copy.deepcopy(self.train_data[:,test_idx])
-        # 確率rateで符号を反転させる
-        for k in range(self.data_size * self.data_size):
-            if rand() < self.noise: 
-                x_test[k] *= -1
-        
-        return x_test
-
-    # トレーニングデータによる学習
-    def fit(self):
-        self.W = np.dot(self.train_data, self.train_data.T)  # W = Σ x*x^T
-        for i in range(self.data_size * self.data_size):
-            self.W[i, i] = 0  # 対角成分0
-
-        self.W /= self.train_num
-
-        return self.W
+        self.plot(self.train_data.T, 'train_data')
 
     # エネルギー計算の関数
     def energy(self, x):
         # V = -1/2 * ΣΣ w*x*x
         return -0.5*np.dot(x.T, np.dot(self.W, x))
 
+    # 類似度（距離）計算
+    def distance(self, x):
+        # 対象データと訓練データの差を計算
+        x = x.reshape(self.data_size * self.data_size, 1)
+        dis = np.sum(np.abs(self.train_data - x), axis=0) / 2
+
+        # 最小の距離とそのインデックスを取り出す
+        sim = np.min(dis)
+        simidx = np.argmin(dis)
+        # print('train model = {0}, distance = {1}'.format(simidx, sim))
+        return sim, simidx
+
+    # テストデータの作成
+    def test_make(self, test_idx):
+        x_test = copy.deepcopy(self.train_data[:, test_idx])
+        # 確率rateで符号を反転させる
+        flip = choice([1, -1], self.data_size * self.data_size, p=[1 - self.noise, self.noise])
+        x_test = x_test * flip
+
+        return x_test
+
+    # トレーニングデータによる学習
+    def fit(self):
+        self.W = np.dot(self.train_data, self.train_data.T)/self.train_num  # W = Σ x*x^T
+        for i in range(self.data_size * self.data_size):
+            self.W[i, i] = 0  # 対角成分0
+
+        return self.W
+
     # テストデータを使って想起(非同期更新)
     def predict_asyn(self, test_data):
-        for ii in range(self.loop_update):
-            num = randint(25)
-            a = np.dot(self.W[num], test_data)
-            test_data[num] = np.sign(a)
+        for _ in range(self.loop_update):
+            num = randint(self.data_size*self.data_size)
+            test_data[num] = np.sign(np.dot(self.W[num], test_data))
 
         return test_data
 
     # 同期更新
     def predict_syn(self, test_data):
-        for ii in range(self.loop_update):
-            e_old = self.energy(test_data)
-            a = np.dot(self.W, test_data)
-            test_data = np.sign(a)
+        e_old = float("inf")
+        for _ in range(self.loop_update):
+            # テストデータの更新とエネルギーの計算
+            test_data = np.sign(np.dot(self.W, test_data))
+            e_new = self.energy(test_data)
 
             # エネルギーが変化しなくなったら打ち切り
-            if self.energy(test_data) == e_old:
-                return test_data
+            if e_new == e_old:
+                break
+
+            e_old = e_new
 
         return test_data
 
-    # 類似度（距離）計算
-    def distance(self, x):
-        x = x.reshape(self.data_size * self.data_size, 1)
-        dis = np.abs(self.train_data - x)  # 対象データと訓練データの差を計算
-        dis = np.sum(dis, axis=0)
-        dis /= 2
-        sim = np.min(dis)  # 最小の距離とそのインデックスを取り出す
-        simidx = np.argmin(dis)
-        # print('train model = {0}, distance = {1}'.format(simidx, sim))
-        return sim, simidx
+    # 描画
+    def plot(self, data, name='example'):
+        for i in range(len(data)):
+            train_graph = data[i].reshape(self.data_size, self.data_size)
+            plt.subplot(1, len(data), i + 1)
+            plt.imshow(train_graph, cmap=cm.Greys_r, interpolation='nearest')
+            plt.title(f'data{i+1}')
+
+        plt.show()
+        # plt.savefig('fig/{}.png'.format(name))
 
     def run(self, test_idx):
-        self.W = self.fit()
         dis = 0  # 正解と異なるマスの数
         acc = 0  # 正解率
 
-        for l in range(self.loop_test):
+        # 訓練データから重み行列の計算
+        self.W = self.fit()
+
+        for l in tqdm(range(self.loop_test)):
+            # テストデータの作成
             test_data = self.test_make(test_idx)
-            # テストデータのプロット
             # self.plot(test_data.reshape(1, -1), 'test_{:04d}_data'.format(l))
 
-            # 更新の方法
-            if self.syn:
-                print('t')
-                test_predict = self.predict_syn(test_data)
-            else:
-                test_predict = self.predict_asyn(test_data)
-
-            # 変更後のテストデータのプロット
+            # テストデータからの想起
+            test_predict = self.predict_syn(test_data) if self.syn else self.predict_asyn(test_data)
             # self.plot(test_data.reshape(1, -1), 'test_{:04d}_after'.format(l))
 
+            # 正答率，距離の計算
             _dis, _ = self.distance(test_predict)
             dis += _dis
             if _dis == 0:
@@ -121,29 +118,23 @@ class Hopfield:
 
         dis /= self.loop_test
         acc /= float(self.loop_test)
-        print("sim = {0}".format(dis))
+        print("distance = {0}".format(dis))
         print("accuracy = {0}".format(acc))
 
 
 def main():
     parser = argparse.ArgumentParser(description='hopfield')
-    parser.add_argument('--train_num', type=int, default=4)  # 記憶パターンの数
     parser.add_argument('--loop_update', type=int, default=300)  # 想起の最大回数
     parser.add_argument('--loop_test', type=int, default=100)  # テスト回数
     parser.add_argument('--noise', type=float, default=0.2)  # ノイズの割合（0~1)
-    parser.add_argument('--test_idx', type=int, default=0)  # テストデータとする記憶パターンの番号
     parser.add_argument('--syn', type=bool, default=False)  # 同期更新，非同期更新
+    parser.add_argument('--train_data', type=str, default="data/train_data.npy")  # 訓練データのパス
+    parser.add_argument('--train_num', type=int, default=4)  # 記憶パターンの数
+    parser.add_argument('--test_idx', type=int, default=0)  # テストデータとする記憶パターンの番号
     args = parser.parse_args()
 
-    # トレーニングデータ生成(6*25)
-    train_data = [[-1, 1, 1, 1, 1, 1, -1, 1, 1, 1, 1, 1, -1, 1, 1, 1, 1, 1, -1, 1, 1, 1, 1, 1, -1],
-                  [1, -1, -1, -1, 1, -1, 1, 1, 1, -1, -1, 1, 1, 1, -1, -1, 1, 1, 1, -1, 1, -1, -1, -1, 1],
-                  [1, 1, -1, 1, 1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1],
-                  [1, -1, -1, 1, 1, -1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, -1, -1, -1, -1],
-                  [-1, 1, 1, 1, 1, -1, 1, 1, -1, 1, -1, 1, 1, -1, 1, -1, -1, -1, -1, -1, 1, 1, 1, -1, 1],
-                  [-1, -1, -1, -1, -1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1]]
-
-    train_data = np.array(train_data, dtype=np.float32)
+    # トレーニングデータ読み込み(6*25)
+    train_data = np.load(args.train_data).astype(np.float32)
     train_data = train_data.T
 
     hop = Hopfield(train_data, args)
